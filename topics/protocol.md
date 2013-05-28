@@ -298,6 +298,95 @@ Basically you simply write space-separated arguments in a telnet session.
 Since no command starts with `*` that is instead used in the unified request
 protocol, Redis is able to detect this condition and parse your command.
 
+Protocol exchange examples
+--------------------------
+
+The following examples show how does a client sent a request to the server, and how the server responses back.
+
+### Status reply
+
+The client sends a `PING` to the server:
+
+```
+C: *1\r\n$4\r\nPING\r\n
+S: +PONG\r\n
+```
+
+The `SET` command also returns a status reply. Note how in this case the value of the key contains a `\r\n` pair, which is correctly interpreted by the client & server as the contents of the key and not the protocol delimiter:
+
+```
+C: *3\r\n$3\r\nSET\r\n$7\r\nkeycrlf\r\n$2\r\n\r\n\r\n
+S: +OK\r\n
+```
+
+### Error reply
+
+The client sends a non-existing command, in this case `PONG`:
+
+```
+C: *1\r\n$4\r\nPONG\r\n
+S: -ERR unknown command 'PONG'\r\n
+```
+
+### Bulk reply
+
+The client reads the value of the key previously set as `\r\n` (`GET keycrlf`):
+
+```
+C: *2\r\n$3\r\nGET\r\n$7\r\nkeycrlf\r\n
+S: $2\r\n\r\n\r\n
+```
+
+If the key would have a different value, say `lorem`, the answer would have been other:
+
+```
+C: *2\r\n$3\r\nGET\r\n$7\r\nkey\r\n
+S: $5\r\nlorem\r\n
+```
+
+#### Null reply
+
+If the key doesn't exist, Redis will return a null value, as in the following:
+
+```
+C: *2\r\n$3\r\nGET\r\n$5\r\nnokey\r\n
+S: $-1\r\n
+```
+
+### Numeric replies
+
+When the client increments a key (`INCR counter`), the server returns the new value as an integer:
+
+```
+C: *2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n
+S: :3\r\n
+```
+
+However, when updating a float value (`INCRBYFLOAT counterf 0.1`), the reply will be a **Bulk Reply**:
+
+```
+C: *3\r\n$11\r\nINCRBYFLOAT\r\n$8\r\ncounterf\r\n$3\r\n0.1\r\n
+S: $3\r\n0.3\r\n
+```
+
+Clients should be aware of this.
+
+### Multi-bulk replies
+
+When the client executes a command that returns lots of values, `SMEMBERS` for instance, Redis will return a multi-bulk reply. For a set that was created with `SADD myset lorem ipsum 1`, executing `SMEMBERS myset` will perform the following exchange:
+
+```
+C: *2\r\n$8\r\nSMEMBERS\r\n$5\r\nmyset\r\n
+S: *3\r\n$1\r\n1\r\n$5\r\nipsum\r\n$5\r\nlorem\r\n
+```
+
+Multi-bulk replies can also return null bulks in its contents. For a hash created with `HMSET "myhash" "field" "value" "lorem" "ipsum"`, the command `HMGET "myhash" "field" "dolor" "lorem"` will return a null bulk for the `dolor` field:
+
+```
+C: "*5\r\n$5\r\nHMGET\r\n$6\r\nmyhash\r\n$5\r\nfield\r\n$5\r\ndolor\r\n$5\r\nlorem\r\n"
+S: "*3\r\n$5\r\nvalue\r\n$-1\r\n$5\r\nipsum\r\n"
+```
+
 High performance parser for the Redis protocol
 ----------------------------------------------
 
